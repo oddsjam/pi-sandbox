@@ -27,11 +27,13 @@ pi runs unsandboxed (the agent process needs `~/.pi/...` access for sessions, co
    - tunnels all network through an in-process HTTP/SOCKS proxy that calls back into our `SandboxAskCallback` for domain checks
    - on macOS the same surface is implemented via `sandbox-exec` instead of bubblewrap+seccomp.
 2. **Read / write / edit tools** — these run in the pi (Node.js) process, *not* a subprocess, so the OS-level sandbox can't see them. We hook `pi.on("tool_call", ...)` and apply the same policy in JS:
-   - `read` always prompts unless the path matches `allowRead`
+   - `read` hard-blocks narrower `denyRead` rules, including Pi's credential files, even beneath an allowed directory; a more specific plain `allowRead` subtree can still carve out a broadly denied home directory. Other reads prompt unless the path matches `allowRead`.
    - `write` and `edit` prompt unless the path matches `allowWrite`; `denyWrite` is a hard-block, never prompted
    - the prompt's choices write back into the config (and reinitialize the bash-side sandbox so the next subprocess sees the new rules)
 
 ### Config storage
+
+If sandbox initialization or reinitialization fails, agent tools and user bash commands are blocked. The footer shows `Sandbox: unavailable (tools blocked)`. Repair the config or runtime and reopen `/sandbox` to retry; unrestricted execution requires an explicit disable through `/sandbox`, `--no-sandbox`, or `enabled: false` at startup.
 
 Everything lives in `~/.pi/agent/sandbox/`:
 
@@ -182,7 +184,7 @@ zackify-pi-sandbox/                  # folder on disk (kept unchanged for sync s
 │   ├── env.ts                    EnvTracker for safely mutating + restoring process.env
 │   ├── disable.ts                performDisable orchestration (testable)
 │   └── teardown.ts               attachTeardown for SIGINT/SIGTERM/SIGHUP/beforeExit
-└── test/                         12 files, 143 bun:test tests, hermetic tmpdir HOME
+└── test/                         13 files, 187 bun:test tests, hermetic tmpdir HOME
 ```
 
 ## Commands and keybindings
@@ -215,11 +217,11 @@ If `apply-seccomp: No such file or directory` appears, your `~/.pi/agent/sandbox
 ## Tests
 
 ```bash
-bun test         # 143 tests across 12 files
+bun test         # 187 tests across 13 files
 bun run typecheck
 ```
 
-Pure modules are unit-tested directly with synthetic state machines and a tmpdir HOME. TUI adapters and `SandboxManager` integration aren't exercised in `bun test` because they're stateful and platform-bound — verify those by running pi.
+Pure modules are unit-tested directly with synthetic state machines and a temporary home directory. Security regressions exercise the registered extension hooks and native read filename resolution using synthetic files, with `SandboxManager.initialize` and `reset` stubbed. Interactive rendering and OS isolation still require verification by running pi.
 
 ## What's different from pi-sandbox
 
@@ -236,7 +238,7 @@ Heavily inspired by [`pi-sandbox`](https://github.com/carderne/pi-sandbox) by Ch
 | Disable cleanliness | Async reset fire-and-forget; session lists keep state across re-enable; env mutations not restored | **Awaits `SandboxManager.reset()`; drains session lists; restores env vars; detaches signal handlers** — closes a class of stale-state bugs (e.g. writes to `~/.bashrc` still being blocked after disable) |
 | Process-level teardown | `session_shutdown` only | Also `SIGINT`/`SIGTERM`/`SIGHUP`/`beforeExit` — OS-level sandbox is reset on hard kills too |
 | URL regex | Required two-dot domains (missed `x.com`-style hosts) | Fixed: `https?://[^\s/?#:]+` |
-| Tests | None published | 143 `bun:test` tests across 12 files, hermetic via tmpdir HOME |
+| Tests | None published | 187 `bun:test` tests across 13 files, hermetic via tmpdir HOME |
 
 ### Default rules in detail
 
